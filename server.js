@@ -299,22 +299,20 @@ app.post('/api/users/login', async (req, res) => {
 });
 
 // ==========================
-// 5. INICIALIZAÇÃO
+// 5. INICIALIZAÇÃO (Corrigida para Render)
 // ==========================
-async function startServer() {
-    try {
-        mongoose.set('strictQuery', false);
-        if (!MONGODB_URI) throw new Error("MONGODB_URI não definida!");
-        await mongoose.connect(MONGODB_URI);
-        console.log("✅ MongoDB Atlas Conectado");
+mongoose.set('strictQuery', false);
 
-        server.listen(PORT, () => {
-            console.log(`🚀 Servidor Ekaterina v2.4 rodando na porta ${PORT}`);
-        });
-    } catch (err) {
-        console.error("❌ Erro fatal:", err.message);
-        process.exit(1);
-    }
+// Conectamos ao banco sem travar o listen do servidor
+if (MONGODB_URI) {
+    mongoose.connect(MONGODB_URI)
+        .then(() => console.log("✅ MongoDB Atlas Conectado"))
+        .catch(err => console.error("❌ Erro conexão MongoDB:", err.message));
+} else {
+    console.error("⚠️ Aviso: MONGODB_URI não definida!");
 }
 
-startServer();
+// O server.listen DEVE ficar fora de blocos async para o Render detectar o app online rápido
+server.listen(PORT, () => {
+    console.log(`🚀 Servidor Ekaterina v2.4 rodando na porta ${PORT}`);
+});
