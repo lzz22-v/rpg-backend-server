@@ -13,7 +13,6 @@ const server = http.createServer(app);
 // ==========================
 // 1. CONFIGURAÇÕES (DINÂMICAS)
 // ==========================
-// O Render define a porta automaticamente. Em local, usa 3000.
 const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'jsonwebtoken_secret_key'; 
 const MONGODB_URI = process.env.MONGODB_URI || "mongodb+srv://luizvale132_db_user:R04cTRkJ4GgOYdPb@cluster0.flnqilb.mongodb.net/project0?retryWrites=true&w=majority";
@@ -24,13 +23,12 @@ cloudinary.config({
     api_secret: process.env.CLOUDINARY_SECRET || "PDbMoEuEePM713_ZF2XMXxEZxIY"    
 });
 
-// Ajuste no CORS para aceitar conexões do App
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
 // ==========================
-// 2. MODELS (MANTIDOS)
+// 2. MODELS
 // ==========================
 const User = mongoose.models.User || mongoose.model('User', new mongoose.Schema({
     username: { type: String, required: true, unique: true },
@@ -61,6 +59,7 @@ const Message = mongoose.models.Message || mongoose.model('Message', new mongoos
     roomCode: String,
     isRead: { type: Boolean, default: false },
     deleted: { type: Boolean, default: false },
+    isEpisode: { type: Boolean, default: false }, // ADICIONADO: Campo para identificar divisor de episódio
     replyTo: {
         text: String,
         senderName: String
@@ -69,11 +68,11 @@ const Message = mongoose.models.Message || mongoose.model('Message', new mongoos
 }));
 
 // ==========================
-// 3. SOCKET.IO (CONFIGURAÇÃO PARA NUVEM)
+// 3. SOCKET.IO
 // ==========================
 const io = new Server(server, { 
     cors: {
-        origin: "*", // Permite conexões de qualquer lugar (necessário para o APK)
+        origin: "*",
         methods: ["GET", "POST"]
     },
     pingTimeout: 30000,
@@ -124,6 +123,18 @@ io.on("connection", (socket) => {
         } catch (e) { console.log("Erro no Join:", e) }
     });
 
+    socket.on("update_character", async ({ charId, name, img }) => {
+        try {
+            await Character.findByIdAndUpdate(charId, { name, img });
+            if (socket.currentRoomId) {
+                const chars = await Character.find({ roomId: socket.currentRoomId });
+                io.to(socket.currentRoomCode).emit("update_list", chars);
+            }
+        } catch (e) {
+            console.log("Erro update char:", e);
+        }
+    });
+
     socket.on("send_message", async (data) => {
         const rCode = socket.currentRoomCode;
         if (!rCode || !data.text) return;
@@ -143,7 +154,8 @@ io.on("connection", (socket) => {
                 roomId: socket.currentRoomId,
                 roomCode: rCode,
                 replyTo: data.replyTo,
-                isRead: false
+                isRead: false,
+                isEpisode: data.isEpisode || false // ADICIONADO: Captura se a mensagem é um episódio
             });
             io.to(rCode).emit("receive_message", msg);
         } catch (e) { console.log("Erro msg:", e) }
@@ -214,12 +226,22 @@ io.on("connection", (socket) => {
         } catch (e) { console.log("Erro delete char:", e); }
     });
 
+    // ==========================
+    // TYPING EVENTS (MANTIDO CONFORME SUA ÚLTIMA VERSÃO)
+    // ==========================
     socket.on("typing", (data) => {
-        socket.to(socket.currentRoomCode).emit("display_typing", data);
+        if (!socket.currentRoomCode) return;
+        socket.to(socket.currentRoomCode).emit("display_typing", {
+            id: String(data.id),
+            name: data.name
+        });
     });
 
     socket.on("stop_typing", (data) => {
-        socket.to(socket.currentRoomCode).emit("hide_typing", data);
+        if (!socket.currentRoomCode) return;
+        socket.to(socket.currentRoomCode).emit("hide_typing", {
+            id: String(data.id)
+        });
     });
 
     socket.on("disconnect", () => console.log(`❌ Desconectado`));
@@ -228,7 +250,7 @@ io.on("connection", (socket) => {
 // ==========================
 // 4. APIs REST
 // ==========================
-app.get('/', (req, res) => res.send("RPG Server Online 🚀")); // Rota para o Render não dar erro de Health Check
+app.get('/', (req, res) => res.send("RPG Server Online 🚀"));
 
 app.post('/api/rooms/create', async (req, res) => {
     try {
@@ -266,14 +288,20 @@ app.post('/api/users/login', async (req, res) => {
 });
 
 // ==========================
-// 5. INICIALIZAÇÃO (IMPORTANTE)
+// 5. INICIALIZAÇÃO
 // ==========================
-mongoose.connect(MONGODB_URI)
-.then(() => {
-    console.log("✅ MongoDB Atlas Conectado");
-    // Removido o IP fixo '192.168...' para funcionar na nuvem
-    server.listen(PORT, '0.0.0.0', () => {
-        console.log(`🚀 Servidor rodando na porta ${PORT}`);
-    });
-})
-.catch(err => console.error("Erro ao conectar no MongoDB:", err));
+async function startServer() {
+    try {
+        await mongoose.connect(MONGODB_URI);
+        console.log("✅ MongoDB Atlas Conectado");
+
+        server.listen(PORT, () => {
+            console.log(`🚀 Servidor rodando na porta ${PORT}`);
+        });
+    } catch (err) {
+        console.error("❌ Erro ao conectar no MongoDB:", err);
+        process.exit(1);
+    }
+}
+
+startServer();
