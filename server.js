@@ -11,7 +11,7 @@ const app = express();
 const server = http.createServer(app);
 
 // ==========================
-// 1. CONFIGURAÇÕES (DINÂMICAS)
+// 1. CONFIGURAÇÕES
 // ==========================
 const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'jsonwebtoken_secret_key'; 
@@ -25,7 +25,21 @@ cloudinary.config({
 
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+// Helper para upload no Cloudinary
+const uploadToCloudinary = async (base64Data) => {
+    try {
+        if (!base64Data || base64Data.startsWith('http')) return base64Data;
+        const res = await cloudinary.uploader.upload(base64Data, {
+            folder: "rpg_characters",
+        });
+        return res.secure_url;
+    } catch (err) {
+        console.error("Cloudinary Error:", err);
+        return null;
+    }
+};
 
 // ==========================
 // 2. MODELS
@@ -59,7 +73,7 @@ const Message = mongoose.models.Message || mongoose.model('Message', new mongoos
     roomCode: String,
     isRead: { type: Boolean, default: false },
     deleted: { type: Boolean, default: false },
-    isEpisode: { type: Boolean, default: false }, // ADICIONADO: Campo para identificar divisor de episódio
+    isEpisode: { type: Boolean, default: false },
     replyTo: {
         text: String,
         senderName: String
@@ -71,10 +85,7 @@ const Message = mongoose.models.Message || mongoose.model('Message', new mongoos
 // 3. SOCKET.IO
 // ==========================
 const io = new Server(server, { 
-    cors: {
-        origin: "*",
-        methods: ["GET", "POST"]
-    },
+    cors: { origin: "*", methods: ["GET", "POST"] },
     pingTimeout: 30000,
 });
 
@@ -125,14 +136,17 @@ io.on("connection", (socket) => {
 
     socket.on("update_character", async ({ charId, name, img }) => {
         try {
-            await Character.findByIdAndUpdate(charId, { name, img });
+            let finalImg = img;
+            if (img && img.startsWith('data:image')) {
+                finalImg = await uploadToCloudinary(img);
+            }
+            
+            await Character.findByIdAndUpdate(charId, { name, img: finalImg });
             if (socket.currentRoomId) {
                 const chars = await Character.find({ roomId: socket.currentRoomId });
                 io.to(socket.currentRoomCode).emit("update_list", chars);
             }
-        } catch (e) {
-            console.log("Erro update char:", e);
-        }
+        } catch (e) { console.log("Erro update char:", e); }
     });
 
     socket.on("send_message", async (data) => {
@@ -155,7 +169,7 @@ io.on("connection", (socket) => {
                 roomCode: rCode,
                 replyTo: data.replyTo,
                 isRead: false,
-                isEpisode: data.isEpisode || false // ADICIONADO: Captura se a mensagem é um episódio
+                isEpisode: data.isEpisode || false 
             });
             io.to(rCode).emit("receive_message", msg);
         } catch (e) { console.log("Erro msg:", e) }
@@ -183,9 +197,12 @@ io.on("connection", (socket) => {
     socket.on("create_character", async (charData) => {
         try {
             if (!socket.currentRoomId) return;
+            
+            const uploadedImg = await uploadToCloudinary(charData.img);
+
             await Character.create({
                 name: charData.name,
-                img: charData.img,
+                img: uploadedImg,
                 roomId: socket.currentRoomId,
                 active: false,
                 owner: null
@@ -226,9 +243,6 @@ io.on("connection", (socket) => {
         } catch (e) { console.log("Erro delete char:", e); }
     });
 
-    // ==========================
-    // TYPING EVENTS (MANTIDO CONFORME SUA ÚLTIMA VERSÃO)
-    // ==========================
     socket.on("typing", (data) => {
         if (!socket.currentRoomCode) return;
         socket.to(socket.currentRoomCode).emit("display_typing", {
@@ -250,7 +264,7 @@ io.on("connection", (socket) => {
 // ==========================
 // 4. APIs REST
 // ==========================
-app.get('/', (req, res) => res.send("RPG Server Online 🚀"));
+app.get('/', (req, res) => res.send("RPG Server Online 🚀 - v2.2.2 Ekaterina"));
 
 app.post('/api/rooms/create', async (req, res) => {
     try {
